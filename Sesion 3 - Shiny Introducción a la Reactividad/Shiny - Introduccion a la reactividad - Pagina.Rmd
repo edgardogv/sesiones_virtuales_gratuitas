@@ -1,0 +1,560 @@
+---
+author: Edgardo Gutierrez Vega
+date: "`r Sys.Date()`"
+output: 
+  html_document
+---
+  
+# **Shiny: Introducción a la reactividad**  
+  
+## **Autor: Edgardo Gutiérrez Vega**  
+  
+## **¿Qué es Shiny?**  
+  
+Shiny es un paquete de R que permite la creación de aplicaciones web interactivas sin necesidad de tener amplios conocimientos en desarrollo web. Las aplicaciones de Shiny son soluciones para analítica de datos que permiten facilitar la interacción con los datos y la comunicación de resultados, todo esto utilizando R. Más sobre Shiny en https://shiny.rstudio.com/  
+  
+## **Objetivo de la Sesión**  
+  
+En esta sesión iremos crearemos una aplicación que nos permitirá visualizar en forma de gráfico de línea y tabla la evolución de casos diarios acumulados o casos diarios nuevos de COVID-19, según países seleccionados.  
+  
+## **Instalación de paquetes necesarios para la sesión**  
+  
+A continuación se provee el comando necesario para instalar todos los paquetes requeridos durante esta sesión.  
+  
+```{r eval=F}
+install.packages(c("shiny", "shinythemes", "ggplot2", "DT", "data.table", "plotly"), dependencies = T)
+```
+  
+## **¿Cómo crear una aplicación en Shiny**  
+  
+La forma más sencilla de crear una aplicación en Shiny es abrir **RStudio**, ir a **File** -> **New File** -> **Shiny Web Ap..**  
+  
+Luego, debemos darle el nombre a la aplicación, posteriormente seleccionamos si queremos la aplicación separada en 2 archivos (**Multiple File**) o si la deseamos en sólo uno (**Single File App**), finalmente elegimos la carpeta del sistema en que deseamos guardarla. Para nuestro caso trabajaremos con un sólo archivo.  
+  
+Por lo general, se creará una carpeta con el nombre que le dimos a la aplicación dentro de la carpeta del sistema seleccionada. Dentro de la carpeta que tiene el nombre que seleccionamos para la aplicación, encontraremos un archivo **app.R** que es el que contendrá el código de la aplicación (esto cuando seleccionamos un sólo archivo, si seleccionáramos múltiples archivos tendríamos **ui.R** y **server.R**, pero este escenario no se considera en esta sesión).  
+  
+El ejemplo creado por RStudio contiene una aplicación sencilla para los datos "Old Faithful Geyser Data", pero nosotros crearemos nuestro propio ejemplo, por lo que reemplazaremos este código por los fragmentos de código de los ejemplos de la siguientes secciones.  
+  
+## **Elementos Fundamentales**  
+  
+### **Interfaz de Usuario (UI)**  
+  
+```{r warning=F, message=F}
+library(shiny)
+ui <- fluidPage()
+print(ui)
+```
+  
+### **Server**  
+  
+```{r}
+server <- function(input, output){}
+server
+```
+  
+### **Platilla de aplicación**  
+  
+```{r eval=F}
+shinyApp(ui = ui, server = server)
+```
+  
+## **Elementos de la UI**  
+  
+### **Lista de selección y carga de archivos**  
+  
+```{r eval=F}
+library(shiny)
+ui <- fluidPage(
+  # Agregando elemento para cargar archivos
+  fileInput("archivo_csv", "Archivo:", accept = ".csv"),
+  # Agregando elemento para lista
+  selectInput("ejeY", "Eje Y",
+              selected = "Value",
+              choices = c("Value", "Nuevos"))
+)
+server <- function(input, output){}
+shinyApp(ui = ui, server = server)
+```
+  
+## **Definiendo elementos en el servidor**  
+  
+### **Función `renderTable`**  
+  
+```{r eval=F}
+library(DT)
+library(shiny)
+ui <- fluidPage(
+  fileInput("archivo_csv", "Archivo:", accept = ".csv"),
+  selectInput("ejeY", "Eje Y",
+              selected = "Casos",
+              choices = c("Value", "Nuevos")),
+  tableOutput("tabla")
+)
+server <- function(input, output){
+    # Tabla para mostrar
+    output$tabla <- renderTable({
+        # Leyendo lista de archivo
+        archivo <- input$archivo_csv
+        # Leyendo datos
+        datos <- read.csv(archivo$datapath, comment.char = "#")
+        # Especificando valor a retornar
+        return(datos)
+    }) 
+}
+shinyApp(ui = ui, server = server)
+```
+  
+### **Funciones `validate`, `renderDT` y `DTOutput`**  
+  
+```{r eval=F}
+library(DT)
+library(shiny)
+ui <- fluidPage(
+  fileInput("archivo_csv", "Archivo:", accept = ".csv"),
+  selectInput("ejeY", "Eje Y",
+              selected = "Casos",
+              choices = c("Value", "Nuevos")),
+  DTOutput("tabla")
+)
+server <- function(input, output){
+    # Tabla para mostrar
+    output$tabla <- renderDT({
+        # Leyendo lista de archivo
+        archivo <- input$archivo_csv
+        # Validando que existe un archivo
+        validate(need(!is.null(archivo), "Cargue el archivo"))
+        # Leyendo datos
+        datos <- read.csv(archivo$datapath, comment.char = "#")
+        # Especificando valor a retornar
+        return(datos)
+    }) 
+}
+shinyApp(ui = ui, server = server)
+```
+  
+### **Agrupando los datos y calculando casos nuevos por día**  
+  
+#### **Creando función `casosNuevosCOVID19`**  
+  
+```{r eval=FALSE}
+# casosNuevosCOVID19 - Agrega una columna al conjunto de datos 
+# con los casos nuevos por fecha y por país
+#
+# @param covid19_agrupado data.frame que contiene los datos COVID-19 
+# en formato largo y totalizados por fecha y por país. Se asume que los nombres 
+# de las columnas son: 
+# "Value" para casos, "Date" para fechas y "Country.Region" para paises y regiones.
+#
+# @return data frame original con una columna adicional que 
+# incluye los casos nuevos por fecha y por país
+#
+# @examples
+# \donotrun{
+#    covid19 <- read.csv("time_series_covid19_confirmed_global_narrow.csv", comment.char = "#")
+#    casosNuevosCOVID19(covid19)
+# }
+#
+# @author Edgardo Gutierrez contacto@edgardogv.com
+casosNuevosCOVID19 <- function(covid19_agrupado){
+  
+  # Nombre unicos de paises (porque se repiten por fecha)
+  paises <- unique(covid19_agrupado$Country.Region)
+  
+  # Calculando los datos nuevos por día
+  almacenamiento_nuevos <- list()
+  for(pais in paises){
+    datos_filtrados <- covid19_agrupado[covid19_agrupado$Country.Region == pais, ]
+    datos_filtrados$Nuevos <- c(datos_filtrados$Value[1],diff(datos_filtrados$Value))
+    almacenamiento_nuevos[[pais]] <- datos_filtrados
+  }
+  
+  # Retornando resultado
+  return(almacenamiento_nuevos)
+}
+```
+  
+#### **Código de la aplicación incluyendo filtrado**  
+  
+```{r eval=F}
+# Cargando Paquetes
+library(DT)
+library(shiny)
+library(data.table)
+# Cargando funcion
+source("casosNuevosCOVID19.R")
+# Todos los paises o regiones
+paises_regiones <- c('Ecuador', 'Costa Rica', 'US', 'Brazil', 'Panama',
+                     'Colombia', 'Argentina', 'Peru', 'Uruguay', 'Chile',
+                     'Mexico', 'El Salvador', 'Honduras', 'Panama')
+# Creando UI
+ui <- fluidPage(
+  fileInput("archivo_csv", "Archivo:", accept = ".csv"),
+  selectInput("ejeY", "Eje Y",
+              selected = "Casos",
+              choices = c("Value", "Nuevos")),
+  selectInput("paises", "Paises", 
+              selected = "Costa Rica",
+              choices = paises_regiones,
+              multiple = T),
+  DTOutput("tabla")
+)
+# Creando servidor
+server <- function(input, output){
+    # Tabla para mostrar
+    output$tabla <- renderDT({
+        # Leyendo lista de archivo
+        archivo <- input$archivo_csv
+        # Validando que existe un archivo
+        validate(need(!is.null(archivo), "Cargue el archivo"))
+        # Leyendo datos
+        datos <- read.csv(archivo$datapath, comment.char = "#")
+        # Filtrando a paises seleccionados
+        datos_filtrados <- datos[datos$Country.Region %in% input$paises, ]
+        # Convirtiendo columna fecha a formato fecha
+        datos_filtrados$Date <- as.Date(datos_filtrados$Date)
+        # Agrupando datos
+        covid19_agrupado <- aggregate(Value ~ Country.Region + Date, datos_filtrados, FUN = sum)
+        # Generando casos nuevos por país
+        datos_lista <- casosNuevosCOVID19(covid19_agrupado)
+        # Creando un solo data frame
+        datos_listos <- as.data.frame(rbindlist(datos_lista))
+        # Especificando valor a retornar
+        return(datos_listos)
+    }) 
+}
+shinyApp(ui = ui, server = server)
+```
+  
+## **Graficación**  
+  
+```{r eval=F}
+# Cargando Paquetes
+library(DT)
+library(shiny)
+library(data.table)
+library(ggplot2)
+library(plotly)
+# Cargando funcion
+source("casosNuevosCOVID19.R")
+# Todos los paises o regiones
+paises_regiones <- c('Ecuador', 'Costa Rica', 'US', 'Brazil', 'Panama',
+                     'Colombia', 'Argentina', 'Peru', 'Uruguay', 'Chile',
+                     'Mexico', 'El Salvador', 'Honduras', 'Panama')
+# Creando UI
+ui <- fluidPage(
+  fileInput("archivo_csv", "Archivo:", accept = ".csv"),
+  selectInput("ejeY", "Eje Y",
+              selected = "Casos",
+              choices = c("Value", "Nuevos")),
+  selectInput("paises", "Paises", 
+              selected = "Costa Rica",
+              choices = paises_regiones,
+              multiple = T),
+  DTOutput("tabla"),
+  plotlyOutput("grafico")
+)
+# Creando servidor
+server <- function(input, output){
+    # Tabla para mostrar
+    output$tabla <- renderDT({
+        # Leyendo lista de archivo
+        archivo <- input$archivo_csv
+        # Validando que existe un archivo
+        validate(need(!is.null(archivo), "Cargue el archivo"))
+        # Leyendo datos
+        datos <- read.csv(archivo$datapath, comment.char = "#")
+        # Filtrando a paises seleccionados
+        datos_filtrados <- datos[datos$Country.Region %in% input$paises, ]
+        # Convirtiendo columna fecha a formato fecha
+        datos_filtrados$Date <- as.Date(datos_filtrados$Date)
+        # Agrupando datos
+        covid19_agrupado <- aggregate(Value ~ Country.Region + Date, datos_filtrados, FUN = sum)
+        # Generando casos nuevos por país
+        datos_lista <- casosNuevosCOVID19(covid19_agrupado)
+        # Creando un solo data frame
+        datos_listos <- as.data.frame(rbindlist(datos_lista))
+        # Especificando valor a retornar
+        return(datos_listos)
+    }) 
+    
+    # Creando gráfico
+    output$grafico <- renderPlotly({
+        # Leyendo lista de archivo
+        archivo <- input$archivo_csv
+        # Validando que existe un archivo
+        validate(need(!is.null(archivo), "Cargue el archivo"))
+        # Leyendo datos
+        datos <- read.csv(archivo$datapath, comment.char = "#")
+        # Filtrando a paises seleccionados
+        datos_filtrados <- datos[datos$Country.Region %in% input$paises, ]
+        # Convirtiendo columna fecha a formato fecha
+        datos_filtrados$Date <- as.Date(datos_filtrados$Date)
+        # Agrupando datos
+        covid19_agrupado <- aggregate(Value ~ Country.Region + Date, datos_filtrados, FUN = sum)
+        # Generando casos nuevos por país
+        datos_lista <- casosNuevosCOVID19(covid19_agrupado)
+        # Creando un solo data frame
+        datos_listos <- as.data.frame(rbindlist(datos_lista))
+        # Guardando gráfico en un objeto
+        g <- ggplot(datos_listos, aes_string(x="Date", y=input$ejeY, group= "Country.Region")) +
+            geom_line(aes(linetype = Country.Region, color=Country.Region))+
+            geom_point(aes(color=Country.Region))+
+            theme(legend.position="top")+
+            labs(x = "Fecha", y = "Casos", col = "Paises", linetype = "")
+        # Transformando el gráfico a plotly
+        return(ggplotly(g))
+    })
+}
+shinyApp(ui = ui, server = server)
+```
+  
+## **Función Reactive**  
+  
+```{r eval=F}
+# Cargando Paquetes
+library(DT)
+library(shiny)
+library(data.table)
+library(ggplot2)
+library(plotly)
+# Cargando funcion
+source("casosNuevosCOVID19.R")
+# Todos los paises o regiones
+paises_regiones <- c('Ecuador', 'Costa Rica', 'US', 'Brazil', 'Panama',
+                     'Colombia', 'Argentina', 'Peru', 'Uruguay', 'Chile',
+                     'Mexico', 'El Salvador', 'Honduras', 'Panama')
+# Creando UI
+ui <- fluidPage(
+  fileInput("archivo_csv", "Archivo:", accept = ".csv"),
+  selectInput("ejeY", "Eje Y",
+              selected = "Casos",
+              choices = c("Value", "Nuevos")),
+  selectInput("paises", "Paises", 
+              selected = "Costa Rica",
+              choices = paises_regiones,
+              multiple = T),
+  DTOutput("tabla"),
+  plotlyOutput("grafico")
+)
+# Creando servidor
+server <- function(input, output){
+    # Creando tabla
+    datos_procesados <- reactive({
+        # Leyendo lista de archivo
+        archivo <- input$archivo_csv
+        # Validando que existe un archivo
+        validate(need(!is.null(archivo), "Cargue el archivo"))
+        # Leyendo datos
+        datos <- read.csv(archivo$datapath, comment.char = "#")
+        # Filtrando a paises seleccionados
+        datos_filtrados <- datos[datos$Country.Region %in% input$paises, ]
+        # Convirtiendo columna fecha a formato fecha
+        datos_filtrados$Date <- as.Date(datos_filtrados$Date)
+        # Agrupando datos
+        covid19_agrupado <- aggregate(Value ~ Country.Region + Date, datos_filtrados, FUN = sum)
+        # Generando casos nuevos por país
+        datos_lista <- casosNuevosCOVID19(covid19_agrupado)
+        # Creando un solo data frame
+        datos_listos <- as.data.frame(rbindlist(datos_lista))
+        # Especificando valor a retornar
+        return(datos_listos)
+    })
+    
+    # Tabla para mostrar
+    output$tabla <- renderDT({
+        datos_procesados()
+    }) 
+    
+    # Creando gráfico
+    output$grafico <- renderPlotly({
+        # Guardando gráfico en un objeto
+        g <- ggplot(datos_procesados(), aes_string(x="Date", y=input$ejeY, group= "Country.Region")) +
+            geom_line(aes(linetype = Country.Region, color=Country.Region))+
+            geom_point(aes(color=Country.Region))+
+            theme(legend.position="top")+
+            labs(x = "Fecha", y = "Casos", col = "Paises", linetype = "")
+        # Transformando el gráfico a plotly
+        return(ggplotly(g))
+    })
+}
+shinyApp(ui = ui, server = server)
+```
+  
+## **Orden de los elementos en el UI**  
+  
+### **Función `column`**  
+  
+```{r eval=F}
+# Cargando Paquetes
+library(DT)
+library(shiny)
+library(data.table)
+library(ggplot2)
+library(plotly)
+# Cargando funcion
+source("casosNuevosCOVID19.R")
+# Todos los paises o regiones
+paises_regiones <- c('Ecuador', 'Costa Rica', 'US', 'Brazil', 'Panama',
+                     'Colombia', 'Argentina', 'Peru', 'Uruguay', 'Chile',
+                     'Mexico', 'El Salvador', 'Honduras', 'Panama')
+# Creando UI
+ui <- fluidPage(
+          column(2,
+                fileInput("archivo_csv", "Archivo:", accept = ".csv"),
+                selectInput("ejeY", "Eje Y",
+                            selected = "Casos",
+                            choices = c("Value", "Nuevos")),
+                selectInput("paises", "Paises", 
+                            selected = "Costa Rica",
+                            choices = paises_regiones,
+                            multiple = T)
+            ),
+            column(5,
+                   plotlyOutput("grafico"),
+                   ),
+            column(5,
+                   DTOutput("tabla")
+                   )
+)
+# Creando servidor
+server <- function(input, output){
+    # Creando tabla
+    datos_procesados <- reactive({
+        # Leyendo lista de archivo
+        archivo <- input$archivo_csv
+        # Validando que existe un archivo
+        validate(need(!is.null(archivo), "Cargue el archivo"))
+        # Leyendo datos
+        datos <- read.csv(archivo$datapath, comment.char = "#")
+        # Filtrando a paises seleccionados
+        datos_filtrados <- datos[datos$Country.Region %in% input$paises, ]
+        # Convirtiendo columna fecha a formato fecha
+        datos_filtrados$Date <- as.Date(datos_filtrados$Date)
+        # Agrupando datos
+        covid19_agrupado <- aggregate(Value ~ Country.Region + Date, datos_filtrados, FUN = sum)
+        # Generando casos nuevos por país
+        datos_lista <- casosNuevosCOVID19(covid19_agrupado)
+        # Creando un solo data frame
+        datos_listos <- as.data.frame(rbindlist(datos_lista))
+        # Especificando valor a retornar
+        return(datos_listos)
+    })
+    
+    # Tabla para mostrar
+    output$tabla <- renderDT({
+        datos_procesados()
+    }) 
+    
+    # Creando gráfico
+    output$grafico <- renderPlotly({
+        # Guardando gráfico en un objeto
+        g <- ggplot(datos_procesados(), aes_string(x="Date", y=input$ejeY, group= "Country.Region")) +
+            geom_line(aes(linetype = Country.Region, color=Country.Region))+
+            geom_point(aes(color=Country.Region))+
+            theme(legend.position="top")+
+            labs(x = "Fecha", y = "Casos", col = "Paises", linetype = "")
+        # Transformando el gráfico a plotly
+        return(ggplotly(g))
+    })
+}
+shinyApp(ui = ui, server = server)
+```
+  
+### **Aplicación Final**  
+  
+```{r eval=F}
+# Cargando Paquetes
+library(DT)
+library(shiny)
+library(data.table)
+library(ggplot2)
+library(plotly)
+library(shinythemes)
+
+# Cargando funcion
+source("casosNuevosCOVID19.R")
+
+# Todos los paises o regiones
+paises_regiones <- c('Afghanistan','Albania','Algeria','Andorra','Angola','Antigua and Barbuda','Argentina','Armenia','Australia','Austria','Azerbaijan','Bahamas','Bahrain','Bangladesh','Barbados','Belarus','Belgium','Belize','Benin','Bhutan','Bolivia','Bosnia and Herzegovina','Botswana','Brazil','Brunei','Bulgaria','Burkina Faso','Burma','Burundi','Cabo Verde','Cambodia','Cameroon','Canada','Central African Republic','Chad','Chile','China','Colombia','Comoros','Congo (Brazzaville)','Congo (Kinshasa)','Costa Rica','Croatia','Cuba','Cyprus','Czechia','Denmark','Diamond Princess','Djibouti','Dominica','Dominican Republic','Ecuador','Egypt','El Salvador','Equatorial Guinea','Eritrea','Estonia','Eswatini','Ethiopia','Fiji','Finland','France','Gabon','Gambia','Georgia','Germany','Ghana','Greece','Grenada','Guatemala','Guinea','Guinea-Bissau','Guyana','Haiti','Holy See','Honduras','Hungary','Iceland','India','Indonesia','Iran','Iraq','Ireland','Israel','Italy','Jamaica','Japan','Jordan','Kazakhstan','Kenya','Korea, South','Kosovo','Kuwait','Kyrgyzstan','Laos','Latvia','Lebanon','Lesotho','Liberia','Libya','Liechtenstein','Lithuania','Luxembourg','Madagascar','Malawi','Malaysia','Maldives','Mali','Malta','Mauritania','Mauritius','Mexico','Moldova','Monaco','Mongolia','Montenegro','Morocco','Mozambique','MS Zaandam','Namibia','Nepal','Netherlands','New Zealand','Nicaragua','Niger','Nigeria','North Macedonia','Norway','Oman','Pakistan','Panama','Papua New Guinea','Paraguay','Peru','Philippines','Poland','Portugal','Qatar','Romania','Russia','Rwanda','Saint Kitts and Nevis','Saint Lucia','Saint Vincent and the Grenadines','San Marino','Sao Tome and Principe','Saudi Arabia','Senegal','Serbia','Seychelles','Sierra Leone','Singapore','Slovakia','Slovenia','Somalia','South Africa','South Sudan','Spain','Sri Lanka','Sudan','Suriname','Sweden','Switzerland','Syria','Taiwan*','Tajikistan','Tanzania','Thailand','Timor-Leste','Togo','Trinidad and Tobago','Tunisia','Turkey','Uganda','Ukraine','United Arab Emirates','United Kingdom','Uruguay','US','Uzbekistan','Venezuela','Vietnam','West Bank and Gaza','Western Sahara','Yemen','Zambia','Zimbabwe')
+
+# Creando UI
+ui <- navbarPage("COVID-19",
+        tabPanel("Exploracion de Datos",
+          fluidPage(
+            theme = shinytheme("cerulean"),
+            column(2,
+                fileInput("archivo_csv", "Archivo:", accept = ".csv"),
+                selectInput("ejeY", "Eje Y",
+                            selected = "Casos",
+                            choices = c("Value", "Nuevos")),
+                selectInput("paises", "Paises", 
+                            selected = "Costa Rica",
+                            choices = paises_regiones,
+                            multiple = T)
+              ),
+              column(5,
+                   h3("Casos por País en el Tiempo"),
+                   br(),
+                   plotlyOutput("grafico"),
+              ),
+              column(5,
+                   h3("Datos Originales"),
+                   br(),
+                   DTOutput("tabla")
+              )
+          )
+        )
+)
+
+# Creando servidor
+server <- function(input, output){
+  
+    # Creando tabla
+    datos_procesados <- reactive({
+        # Leyendo lista de archivo
+        archivo <- input$archivo_csv
+        # Validando que existe un archivo
+        validate(need(!is.null(archivo), "Cargue el archivo"))
+        # Leyendo datos
+        datos <- read.csv(archivo$datapath, comment.char = "#")
+        # Filtrando a paises seleccionados
+        datos_filtrados <- datos[datos$Country.Region %in% input$paises, ]
+        # Convirtiendo columna fecha a formato fecha
+        datos_filtrados$Date <- as.Date(datos_filtrados$Date)
+        # Agrupando datos
+        covid19_agrupado <- aggregate(Value ~ Country.Region + Date, datos_filtrados, FUN = sum)
+        # Generando casos nuevos por país
+        datos_lista <- casosNuevosCOVID19(covid19_agrupado)
+        # Creando un solo data frame
+        datos_listos <- as.data.frame(rbindlist(datos_lista))
+        # Especificando valor a retornar
+        return(datos_listos)
+    })
+    
+    # Tabla para mostrar
+    output$tabla <- renderDT({
+        datos_procesados()
+    }) 
+    
+    # Creando gráfico
+    output$grafico <- renderPlotly({
+        # Guardando gráfico en un objeto
+        g <- ggplot(datos_procesados(), aes_string(x="Date", y=input$ejeY, group= "Country.Region")) +
+            geom_line(aes(linetype = Country.Region, color=Country.Region))+
+            geom_point(aes(color=Country.Region))+
+            theme(legend.position="top")+
+            labs(x = "Fecha", y = "Casos", col = "Paises", linetype = "")
+        # Transformando el gráfico a plotly
+        return(ggplotly(g))
+    })
+}
+
+# Ejecución de la aplicación
+shinyApp(ui = ui, server = server)
+```
+  
+## **Conclusión**  
+  
+Con menos de 100 líneas de código se pudo crear una aplicación interactiva con Shiny y otros paquetes para poder visualizar los datos de COVID-19 de una manera dinámica y práctica. En esta sesión sólo se tocó una pequeña parte de todo el potencial que ofrece Shiny, por lo que le insto a continuar aprendiendo sobre este excelente paquete y otros complementos que ha desarrollado la comunidad.  
+  
+  
